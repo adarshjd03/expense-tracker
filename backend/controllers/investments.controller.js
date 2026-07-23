@@ -1,25 +1,37 @@
-const db = require('../db');
+const { sql } = require('../db');
 
-exports.getInvestments = (req, res, next) => {
+exports.getInvestments = async (req, res, next) => {
   try {
     const { type } = req.query;
-    let query = 'SELECT * FROM investments WHERE user_id = ?';
-    const params = [req.userId];
-
+    
+    let result;
     if (type) {
-      query += ' AND type = ?';
-      params.push(type);
+      result = await sql`
+        SELECT * FROM investments 
+        WHERE user_id = ${req.userId} AND type = ${type}
+        ORDER BY created_at DESC
+      `;
+    } else {
+      result = await sql`
+        SELECT * FROM investments 
+        WHERE user_id = ${req.userId}
+        ORDER BY created_at DESC
+      `;
     }
 
-    query += ' ORDER BY created_at DESC';
-
-    const investments = db.prepare(query).all(...params);
-
     // Calculate return on investment for each entry
-    const enriched = investments.map(inv => {
-      const roi = inv.amount > 0 ? ((inv.current_value - inv.amount) / inv.amount) * 100 : 0;
-      const gain = inv.current_value - inv.amount;
-      return { ...inv, roi: Math.round(roi * 100) / 100, gain: Math.round(gain * 100) / 100 };
+    const enriched = result.rows.map(inv => {
+      const amount = parseFloat(inv.amount);
+      const current_value = parseFloat(inv.current_value);
+      const roi = amount > 0 ? ((current_value - amount) / amount) * 100 : 0;
+      const gain = current_value - amount;
+      return { 
+        ...inv, 
+        amount,
+        current_value,
+        roi: Math.round(roi * 100) / 100, 
+        gain: Math.round(gain * 100) / 100 
+      };
     });
 
     // Portfolio summary
@@ -42,7 +54,7 @@ exports.getInvestments = (req, res, next) => {
   }
 };
 
-exports.createInvestment = (req, res, next) => {
+exports.createInvestment = async (req, res, next) => {
   try {
     const { name, type, amount, current_value, purchase_date, notes } = req.body;
 
@@ -55,33 +67,41 @@ exports.createInvestment = (req, res, next) => {
       return res.status(400).json({ error: 'Current value cannot be negative.' });
     }
 
-    const result = db.prepare(`
+    const result = await sql`
       INSERT INTO investments (user_id, name, type, amount, current_value, purchase_date, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(req.userId, name, type, amount, currentVal, purchase_date, notes || null);
+      VALUES (${req.userId}, ${name}, ${type}, ${amount}, ${currentVal}, ${purchase_date}, ${notes || null})
+      RETURNING *
+    `;
 
-    const created = db.prepare('SELECT * FROM investments WHERE id = ?').get(result.lastInsertRowid);
-    const roi = created.amount > 0 ? ((created.current_value - created.amount) / created.amount) * 100 : 0;
+    const created = result.rows[0];
+    const amt = parseFloat(created.amount);
+    const currVal = parseFloat(created.current_value);
+    const roi = amt > 0 ? ((currVal - amt) / amt) * 100 : 0;
 
     res.status(201).json({
       ...created,
+      amount: amt,
+      current_value: currVal,
       roi: Math.round(roi * 100) / 100,
-      gain: Math.round((created.current_value - created.amount) * 100) / 100
+      gain: Math.round((currVal - amt) * 100) / 100
     });
   } catch (err) {
     next(err);
   }
 };
 
-exports.updateInvestment = (req, res, next) => {
+exports.updateInvestment = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const existing = db.prepare('SELECT * FROM investments WHERE id = ? AND user_id = ?').get(id, req.userId);
+    const existingResult = await sql`
+      SELECT * FROM investments WHERE id = ${id} AND user_id = ${req.userId}
+    `;
 
-    if (!existing) {
+    if (existingResult.rows.length === 0) {
       return res.status(404).json({ error: 'Investment not found.' });
     }
 
+    const existing = existingResult.rows[0];
     const name = req.body.name !== undefined ? req.body.name : existing.name;
     const type = req.body.type !== undefined ? req.body.type : existing.type;
     const amount = req.body.amount !== undefined ? req.body.amount : existing.amount;
@@ -93,31 +113,40 @@ exports.updateInvestment = (req, res, next) => {
       return res.status(400).json({ error: 'Amount must be greater than 0.' });
     }
 
-    db.prepare(`
+    const result = await sql`
       UPDATE investments 
-      SET name = ?, type = ?, amount = ?, current_value = ?, purchase_date = ?, notes = ?
-      WHERE id = ? AND user_id = ?
-    `).run(name, type, amount, current_value, purchase_date, notes, id, req.userId);
+      SET name = ${name}, type = ${type}, amount = ${amount}, current_value = ${current_value}, 
+          purchase_date = ${purchase_date}, notes = ${notes}
+      WHERE id = ${id} AND user_id = ${req.userId}
+      RETURNING *
+    `;
 
-    const updated = db.prepare('SELECT * FROM investments WHERE id = ?').get(id);
-    const roi = updated.amount > 0 ? ((updated.current_value - updated.amount) / updated.amount) * 100 : 0;
+    const updated = result.rows[0];
+    const amt = parseFloat(updated.amount);
+    const currVal = parseFloat(updated.current_value);
+    const roi = amt > 0 ? ((currVal - amt) / amt) * 100 : 0;
 
     res.json({
       ...updated,
+      amount: amt,
+      current_value: currVal,
       roi: Math.round(roi * 100) / 100,
-      gain: Math.round((updated.current_value - updated.amount) * 100) / 100
+      gain: Math.round((currVal - amt) * 100) / 100
     });
   } catch (err) {
     next(err);
   }
 };
 
-exports.deleteInvestment = (req, res, next) => {
+exports.deleteInvestment = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const result = db.prepare('DELETE FROM investments WHERE id = ? AND user_id = ?').run(id, req.userId);
+    const result = await sql`
+      DELETE FROM investments WHERE id = ${id} AND user_id = ${req.userId}
+      RETURNING id
+    `;
 
-    if (result.changes === 0) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Investment not found.' });
     }
 

@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const { initializeDatabase } = require('./db');
 
 const authRoutes = require('./routes/auth.routes');
 const categoriesRoutes = require('./routes/categories.routes');
@@ -13,6 +14,11 @@ const verifyToken = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
+
+// Initialize database tables (runs once, safe to call multiple times)
+initializeDatabase().catch(err => {
+  console.error('Failed to initialize database:', err);
+});
 
 app.use(cors());
 app.use(express.json());

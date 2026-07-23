@@ -1,23 +1,29 @@
-const db = require('../db');
+const { sql } = require('../db');
 
-exports.getGoals = (req, res, next) => {
+exports.getGoals = async (req, res, next) => {
   try {
     const { status } = req.query;
-    let query = 'SELECT * FROM goals WHERE user_id = ?';
-    const params = [req.userId];
-
+    
+    let result;
     if (status) {
-      query += ' AND status = ?';
-      params.push(status);
+      result = await sql`
+        SELECT * FROM goals 
+        WHERE user_id = ${req.userId} AND status = ${status}
+        ORDER BY created_at DESC
+      `;
+    } else {
+      result = await sql`
+        SELECT * FROM goals 
+        WHERE user_id = ${req.userId}
+        ORDER BY created_at DESC
+      `;
     }
 
-    query += ' ORDER BY created_at DESC';
-
-    const goals = db.prepare(query).all(...params);
-
     // Calculate progress percentage for each goal
-    const goalsWithProgress = goals.map(goal => ({
+    const goalsWithProgress = result.rows.map(goal => ({
       ...goal,
+      target_amount: parseFloat(goal.target_amount),
+      current_amount: parseFloat(goal.current_amount),
       progress: goal.target_amount > 0 ? Math.round((goal.current_amount / goal.target_amount) * 100) : 0
     }));
 
@@ -27,7 +33,7 @@ exports.getGoals = (req, res, next) => {
   }
 };
 
-exports.createGoal = (req, res, next) => {
+exports.createGoal = async (req, res, next) => {
   try {
     const { name, target_amount, current_amount, deadline } = req.body;
 
@@ -40,14 +46,17 @@ exports.createGoal = (req, res, next) => {
       return res.status(400).json({ error: 'Current amount cannot be negative.' });
     }
 
-    const result = db.prepare(`
+    const result = await sql`
       INSERT INTO goals (user_id, name, target_amount, current_amount, deadline, status)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(req.userId, name, target_amount, currentAmt, deadline || null, 'active');
+      VALUES (${req.userId}, ${name}, ${target_amount}, ${currentAmt}, ${deadline || null}, 'active')
+      RETURNING *
+    `;
 
-    const created = db.prepare('SELECT * FROM goals WHERE id = ?').get(result.lastInsertRowid);
+    const created = result.rows[0];
     const goalWithProgress = {
       ...created,
+      target_amount: parseFloat(created.target_amount),
+      current_amount: parseFloat(created.current_amount),
       progress: created.target_amount > 0 ? Math.round((created.current_amount / created.target_amount) * 100) : 0
     };
 
@@ -57,15 +66,18 @@ exports.createGoal = (req, res, next) => {
   }
 };
 
-exports.updateGoal = (req, res, next) => {
+exports.updateGoal = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const existing = db.prepare('SELECT * FROM goals WHERE id = ? AND user_id = ?').get(id, req.userId);
+    const existingResult = await sql`
+      SELECT * FROM goals WHERE id = ${id} AND user_id = ${req.userId}
+    `;
 
-    if (!existing) {
+    if (existingResult.rows.length === 0) {
       return res.status(404).json({ error: 'Goal not found.' });
     }
 
+    const existing = existingResult.rows[0];
     const name = req.body.name !== undefined ? req.body.name : existing.name;
     const target_amount = req.body.target_amount !== undefined ? req.body.target_amount : existing.target_amount;
     const current_amount = req.body.current_amount !== undefined ? req.body.current_amount : existing.current_amount;
@@ -83,15 +95,19 @@ exports.updateGoal = (req, res, next) => {
     // Auto-complete if target reached
     const finalStatus = current_amount >= target_amount && status === 'active' ? 'completed' : status;
 
-    db.prepare(`
+    const result = await sql`
       UPDATE goals 
-      SET name = ?, target_amount = ?, current_amount = ?, deadline = ?, status = ?
-      WHERE id = ? AND user_id = ?
-    `).run(name, target_amount, current_amount, deadline, finalStatus, id, req.userId);
+      SET name = ${name}, target_amount = ${target_amount}, current_amount = ${current_amount}, 
+          deadline = ${deadline}, status = ${finalStatus}
+      WHERE id = ${id} AND user_id = ${req.userId}
+      RETURNING *
+    `;
 
-    const updated = db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
+    const updated = result.rows[0];
     const goalWithProgress = {
       ...updated,
+      target_amount: parseFloat(updated.target_amount),
+      current_amount: parseFloat(updated.current_amount),
       progress: updated.target_amount > 0 ? Math.round((updated.current_amount / updated.target_amount) * 100) : 0
     };
 
@@ -101,12 +117,15 @@ exports.updateGoal = (req, res, next) => {
   }
 };
 
-exports.deleteGoal = (req, res, next) => {
+exports.deleteGoal = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const result = db.prepare('DELETE FROM goals WHERE id = ? AND user_id = ?').run(id, req.userId);
+    const result = await sql`
+      DELETE FROM goals WHERE id = ${id} AND user_id = ${req.userId}
+      RETURNING id
+    `;
 
-    if (result.changes === 0) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Goal not found.' });
     }
 
@@ -116,7 +135,7 @@ exports.deleteGoal = (req, res, next) => {
   }
 };
 
-exports.contributeToGoal = (req, res, next) => {
+exports.contributeToGoal = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { amount } = req.body;
@@ -125,24 +144,30 @@ exports.contributeToGoal = (req, res, next) => {
       return res.status(400).json({ error: 'Valid contribution amount > 0 is required.' });
     }
 
-    const existing = db.prepare('SELECT * FROM goals WHERE id = ? AND user_id = ?').get(id, req.userId);
+    const existingResult = await sql`
+      SELECT * FROM goals WHERE id = ${id} AND user_id = ${req.userId}
+    `;
 
-    if (!existing) {
+    if (existingResult.rows.length === 0) {
       return res.status(404).json({ error: 'Goal not found.' });
     }
 
-    const newAmount = existing.current_amount + amount;
+    const existing = existingResult.rows[0];
+    const newAmount = parseFloat(existing.current_amount) + parseFloat(amount);
     const finalStatus = newAmount >= existing.target_amount ? 'completed' : existing.status;
 
-    db.prepare(`
+    const result = await sql`
       UPDATE goals 
-      SET current_amount = ?, status = ?
-      WHERE id = ? AND user_id = ?
-    `).run(newAmount, finalStatus, id, req.userId);
+      SET current_amount = ${newAmount}, status = ${finalStatus}
+      WHERE id = ${id} AND user_id = ${req.userId}
+      RETURNING *
+    `;
 
-    const updated = db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
+    const updated = result.rows[0];
     const goalWithProgress = {
       ...updated,
+      target_amount: parseFloat(updated.target_amount),
+      current_amount: parseFloat(updated.current_amount),
       progress: updated.target_amount > 0 ? Math.round((updated.current_amount / updated.target_amount) * 100) : 0
     };
 

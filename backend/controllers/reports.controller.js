@@ -1,6 +1,6 @@
-const db = require('../db');
+const { sql } = require('../db');
 
-exports.getReport = (req, res, next) => {
+exports.getReport = async (req, res, next) => {
   try {
     const { from, to, type, category_id } = req.query;
 
@@ -9,27 +9,52 @@ exports.getReport = (req, res, next) => {
     }
 
     // Build base transaction query
-    let txQuery = `
-      SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
-             COALESCE(c.name, 'Uncategorized') as category_name
-      FROM transactions t
-      LEFT JOIN categories c ON t.category_id = c.id
-      WHERE t.user_id = ? AND t.date >= ? AND t.date <= ?
-    `;
-    const txParams = [req.userId, from, to];
-
-    if (type) {
-      txQuery += ' AND t.type = ?';
-      txParams.push(type);
+    let result;
+    if (type && category_id) {
+      result = await sql`
+        SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
+               COALESCE(c.name, 'Uncategorized') as category_name
+        FROM transactions t
+        LEFT JOIN categories c ON t.category_id = c.id
+        WHERE t.user_id = ${req.userId} AND t.date >= ${from} AND t.date <= ${to}
+              AND t.type = ${type} AND t.category_id = ${category_id}
+        ORDER BY t.date DESC, t.id DESC
+      `;
+    } else if (type) {
+      result = await sql`
+        SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
+               COALESCE(c.name, 'Uncategorized') as category_name
+        FROM transactions t
+        LEFT JOIN categories c ON t.category_id = c.id
+        WHERE t.user_id = ${req.userId} AND t.date >= ${from} AND t.date <= ${to}
+              AND t.type = ${type}
+        ORDER BY t.date DESC, t.id DESC
+      `;
+    } else if (category_id) {
+      result = await sql`
+        SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
+               COALESCE(c.name, 'Uncategorized') as category_name
+        FROM transactions t
+        LEFT JOIN categories c ON t.category_id = c.id
+        WHERE t.user_id = ${req.userId} AND t.date >= ${from} AND t.date <= ${to}
+              AND t.category_id = ${category_id}
+        ORDER BY t.date DESC, t.id DESC
+      `;
+    } else {
+      result = await sql`
+        SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
+               COALESCE(c.name, 'Uncategorized') as category_name
+        FROM transactions t
+        LEFT JOIN categories c ON t.category_id = c.id
+        WHERE t.user_id = ${req.userId} AND t.date >= ${from} AND t.date <= ${to}
+        ORDER BY t.date DESC, t.id DESC
+      `;
     }
-    if (category_id) {
-      txQuery += ' AND t.category_id = ?';
-      txParams.push(category_id);
-    }
 
-    txQuery += ' ORDER BY t.date DESC, t.id DESC';
-
-    const transactions = db.prepare(txQuery).all(...txParams);
+    const transactions = result.rows.map(t => ({
+      ...t,
+      amount: parseFloat(t.amount)
+    }));
 
     // Totals for the period
     const totalIncome = transactions
@@ -63,9 +88,10 @@ exports.getReport = (req, res, next) => {
     // Daily breakdown
     const byDayMap = {};
     transactions.forEach(t => {
-      if (!byDayMap[t.date]) byDayMap[t.date] = { date: t.date, income: 0, expense: 0 };
-      if (t.type === 'income') byDayMap[t.date].income += t.amount;
-      else byDayMap[t.date].expense += t.amount;
+      const dateStr = t.date instanceof Date ? t.date.toISOString().slice(0, 10) : String(t.date).slice(0, 10);
+      if (!byDayMap[dateStr]) byDayMap[dateStr] = { date: dateStr, income: 0, expense: 0 };
+      if (t.type === 'income') byDayMap[dateStr].income += t.amount;
+      else byDayMap[dateStr].expense += t.amount;
     });
 
     const byDay = Object.values(byDayMap).sort((a, b) => a.date.localeCompare(b.date));
@@ -73,10 +99,10 @@ exports.getReport = (req, res, next) => {
     // Monthly breakdown
     const byMonthMap = {};
     transactions.forEach(t => {
-      const month = t.date.slice(0, 7);
-      if (!byMonthMap[month]) byMonthMap[month] = { month, income: 0, expense: 0 };
-      if (t.type === 'income') byMonthMap[month].income += t.amount;
-      else byMonthMap[month].expense += t.amount;
+      const dateStr = t.date instanceof Date ? t.date.toISOString().slice(0, 7) : String(t.date).slice(0, 7);
+      if (!byMonthMap[dateStr]) byMonthMap[dateStr] = { month: dateStr, income: 0, expense: 0 };
+      if (t.type === 'income') byMonthMap[dateStr].income += t.amount;
+      else byMonthMap[dateStr].expense += t.amount;
     });
 
     const byMonth = Object.values(byMonthMap).sort((a, b) => a.month.localeCompare(b.month));
