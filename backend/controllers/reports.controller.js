@@ -1,6 +1,6 @@
-const { query } = require('../db');
+const db = require('../db');
 
-exports.getReport = async (req, res, next) => {
+exports.getReport = (req, res, next) => {
   try {
     const { from, to, type, category_id } = req.query;
 
@@ -9,34 +9,27 @@ exports.getReport = async (req, res, next) => {
     }
 
     // Build base transaction query
-    let sql = `
+    let txQuery = `
       SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
              COALESCE(c.name, 'Uncategorized') as category_name
       FROM transactions t
       LEFT JOIN categories c ON t.category_id = c.id
-      WHERE t.user_id = $1 AND t.date >= $2 AND t.date <= $3
+      WHERE t.user_id = ? AND t.date >= ? AND t.date <= ?
     `;
-    const params = [req.userId, from, to];
-    let paramIndex = 4;
+    const txParams = [req.userId, from, to];
 
     if (type) {
-      sql += ` AND t.type = $${paramIndex}`;
-      params.push(type);
-      paramIndex++;
+      txQuery += ' AND t.type = ?';
+      txParams.push(type);
     }
     if (category_id) {
-      sql += ` AND t.category_id = $${paramIndex}`;
-      params.push(category_id);
-      paramIndex++;
+      txQuery += ' AND t.category_id = ?';
+      txParams.push(category_id);
     }
 
-    sql += ' ORDER BY t.date DESC, t.id DESC';
+    txQuery += ' ORDER BY t.date DESC, t.id DESC';
 
-    const result = await query(sql, params);
-    const transactions = result.rows.map(t => ({
-      ...t,
-      amount: parseFloat(t.amount)
-    }));
+    const transactions = db.prepare(txQuery).all(...txParams);
 
     // Totals for the period
     const totalIncome = transactions
@@ -70,10 +63,9 @@ exports.getReport = async (req, res, next) => {
     // Daily breakdown
     const byDayMap = {};
     transactions.forEach(t => {
-      const dateStr = t.date instanceof Date ? t.date.toISOString().slice(0, 10) : String(t.date).slice(0, 10);
-      if (!byDayMap[dateStr]) byDayMap[dateStr] = { date: dateStr, income: 0, expense: 0 };
-      if (t.type === 'income') byDayMap[dateStr].income += t.amount;
-      else byDayMap[dateStr].expense += t.amount;
+      if (!byDayMap[t.date]) byDayMap[t.date] = { date: t.date, income: 0, expense: 0 };
+      if (t.type === 'income') byDayMap[t.date].income += t.amount;
+      else byDayMap[t.date].expense += t.amount;
     });
 
     const byDay = Object.values(byDayMap).sort((a, b) => a.date.localeCompare(b.date));
@@ -81,10 +73,10 @@ exports.getReport = async (req, res, next) => {
     // Monthly breakdown
     const byMonthMap = {};
     transactions.forEach(t => {
-      const dateStr = t.date instanceof Date ? t.date.toISOString().slice(0, 7) : String(t.date).slice(0, 7);
-      if (!byMonthMap[dateStr]) byMonthMap[dateStr] = { month: dateStr, income: 0, expense: 0 };
-      if (t.type === 'income') byMonthMap[dateStr].income += t.amount;
-      else byMonthMap[dateStr].expense += t.amount;
+      const month = t.date.slice(0, 7);
+      if (!byMonthMap[month]) byMonthMap[month] = { month, income: 0, expense: 0 };
+      if (t.type === 'income') byMonthMap[month].income += t.amount;
+      else byMonthMap[month].expense += t.amount;
     });
 
     const byMonth = Object.values(byMonthMap).sort((a, b) => a.month.localeCompare(b.month));

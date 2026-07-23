@@ -1,19 +1,16 @@
-const { query } = require('../db');
+const db = require('../db');
 const { validateCategory } = require('../utils/validators');
 
-exports.getCategories = async (req, res, next) => {
+exports.getCategories = (req, res, next) => {
   try {
-    const result = await query(
-      'SELECT id, name, type FROM categories WHERE user_id = $1 ORDER BY name ASC',
-      [req.userId]
-    );
-    res.json(result.rows);
+    const categories = db.prepare('SELECT id, name, type FROM categories WHERE user_id = ? ORDER BY name ASC').all(req.userId);
+    res.json(categories);
   } catch (err) {
     next(err);
   }
 };
 
-exports.createCategory = async (req, res, next) => {
+exports.createCategory = (req, res, next) => {
   try {
     const { name, type } = req.body;
     const validation = validateCategory({ name, type });
@@ -21,12 +18,12 @@ exports.createCategory = async (req, res, next) => {
       return res.status(400).json({ error: validation.message });
     }
 
-    const result = await query(
-      'INSERT INTO categories (user_id, name, type) VALUES ($1, $2, $3) RETURNING id, name, type',
-      [req.userId, name, type]
-    );
-    
-    res.status(201).json(result.rows[0]);
+    const result = db.prepare('INSERT INTO categories (user_id, name, type) VALUES (?, ?, ?)').run(req.userId, name, type);
+    res.status(201).json({
+      id: result.lastInsertRowid,
+      name,
+      type
+    });
   } catch (err) {
     next(err);
   }
