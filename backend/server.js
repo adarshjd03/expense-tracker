@@ -37,9 +37,31 @@ app.use(errorHandler);
 // Only start server if not in serverless environment
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n❌ Port ${PORT} is already in use.`);
+      console.error(`   Run this to free it: npx kill-port ${PORT}`);
+      console.error(`   Or in PowerShell: Stop-Process -Id (netstat -ano | findstr :${PORT} | ForEach-Object { ($_ -split "\\s+")[-1] }) -Force\n`);
+      process.exit(1);
+    } else {
+      throw err;
+    }
+  });
+
+  // Graceful shutdown — ensures nodemon restarts release the port cleanly
+  const shutdown = () => {
+    server.close(() => {
+      console.log('Server closed cleanly.');
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 module.exports = app;

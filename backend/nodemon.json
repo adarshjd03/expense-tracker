@@ -1,0 +1,6 @@
+{
+  "delay": 1000,
+  "watch": ["."],
+  "ignore": ["node_modules", "database.sqlite", "database.sqlite-shm", "database.sqlite-wal"],
+  "ext": "js,json"
+}
