@@ -10,16 +10,9 @@ const api = axios.create({
 // Request interceptor: add auth token to headers
 api.interceptors.request.use(
   (config) => {
-    const userData = localStorage.getItem('user');
-    if (userData) {
-      try {
-        const user = JSON.parse(userData);
-        if (user.token) {
-          config.headers.Authorization = `Bearer ${user.token}`;
-        }
-      } catch (err) {
-        console.error('Failed to parse user data', err);
-      }
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
@@ -31,6 +24,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
+      localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';
     }
