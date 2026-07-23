@@ -1,4 +1,4 @@
-const { sql } = require('../db');
+const { query } = require('../db');
 
 exports.getReport = async (req, res, next) => {
   try {
@@ -9,48 +9,30 @@ exports.getReport = async (req, res, next) => {
     }
 
     // Build base transaction query
-    let result;
-    if (type && category_id) {
-      result = await sql`
-        SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
-               COALESCE(c.name, 'Uncategorized') as category_name
-        FROM transactions t
-        LEFT JOIN categories c ON t.category_id = c.id
-        WHERE t.user_id = ${req.userId} AND t.date >= ${from} AND t.date <= ${to}
-              AND t.type = ${type} AND t.category_id = ${category_id}
-        ORDER BY t.date DESC, t.id DESC
-      `;
-    } else if (type) {
-      result = await sql`
-        SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
-               COALESCE(c.name, 'Uncategorized') as category_name
-        FROM transactions t
-        LEFT JOIN categories c ON t.category_id = c.id
-        WHERE t.user_id = ${req.userId} AND t.date >= ${from} AND t.date <= ${to}
-              AND t.type = ${type}
-        ORDER BY t.date DESC, t.id DESC
-      `;
-    } else if (category_id) {
-      result = await sql`
-        SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
-               COALESCE(c.name, 'Uncategorized') as category_name
-        FROM transactions t
-        LEFT JOIN categories c ON t.category_id = c.id
-        WHERE t.user_id = ${req.userId} AND t.date >= ${from} AND t.date <= ${to}
-              AND t.category_id = ${category_id}
-        ORDER BY t.date DESC, t.id DESC
-      `;
-    } else {
-      result = await sql`
-        SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
-               COALESCE(c.name, 'Uncategorized') as category_name
-        FROM transactions t
-        LEFT JOIN categories c ON t.category_id = c.id
-        WHERE t.user_id = ${req.userId} AND t.date >= ${from} AND t.date <= ${to}
-        ORDER BY t.date DESC, t.id DESC
-      `;
+    let sql = `
+      SELECT t.id, t.amount, t.type, t.note, t.date, t.category_id,
+             COALESCE(c.name, 'Uncategorized') as category_name
+      FROM transactions t
+      LEFT JOIN categories c ON t.category_id = c.id
+      WHERE t.user_id = $1 AND t.date >= $2 AND t.date <= $3
+    `;
+    const params = [req.userId, from, to];
+    let paramIndex = 4;
+
+    if (type) {
+      sql += ` AND t.type = $${paramIndex}`;
+      params.push(type);
+      paramIndex++;
+    }
+    if (category_id) {
+      sql += ` AND t.category_id = $${paramIndex}`;
+      params.push(category_id);
+      paramIndex++;
     }
 
+    sql += ' ORDER BY t.date DESC, t.id DESC';
+
+    const result = await query(sql, params);
     const transactions = result.rows.map(t => ({
       ...t,
       amount: parseFloat(t.amount)

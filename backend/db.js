@@ -1,10 +1,27 @@
-const { sql } = require('@vercel/postgres');
+const { Pool } = require('pg');
+
+// Create PostgreSQL connection pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || process.env.POSTGRES_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+// Helper function to execute queries
+const query = async (text, params) => {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(text, params);
+    return result;
+  } finally {
+    client.release();
+  }
+};
 
 // Initialize database tables
 async function initializeDatabase() {
   try {
     // Create users table
-    await sql`
+    await query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -12,10 +29,10 @@ async function initializeDatabase() {
         password_hash TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
-    `;
+    `);
 
     // Create categories table
-    await sql`
+    await query(`
       CREATE TABLE IF NOT EXISTS categories (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL,
@@ -23,10 +40,10 @@ async function initializeDatabase() {
         type TEXT NOT NULL CHECK(type IN ('income', 'expense')),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
-    `;
+    `);
 
     // Create transactions table
-    await sql`
+    await query(`
       CREATE TABLE IF NOT EXISTS transactions (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL,
@@ -39,10 +56,10 @@ async function initializeDatabase() {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
       )
-    `;
+    `);
 
     // Create goals table
-    await sql`
+    await query(`
       CREATE TABLE IF NOT EXISTS goals (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL,
@@ -54,10 +71,10 @@ async function initializeDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
-    `;
+    `);
 
     // Create investments table
-    await sql`
+    await query(`
       CREATE TABLE IF NOT EXISTS investments (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL,
@@ -70,10 +87,10 @@ async function initializeDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
-    `;
+    `);
 
     // Create budgets table
-    await sql`
+    await query(`
       CREATE TABLE IF NOT EXISTS budgets (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL,
@@ -85,13 +102,13 @@ async function initializeDatabase() {
         FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE,
         UNIQUE(user_id, category_id, month)
       )
-    `;
+    `);
 
-    console.log('✓ Database initialized (Vercel Postgres)');
+    console.log('✓ Database initialized (PostgreSQL)');
   } catch (error) {
     console.error('Database initialization error:', error);
     throw error;
   }
 }
 
-module.exports = { sql, initializeDatabase };
+module.exports = { pool, query, initializeDatabase };

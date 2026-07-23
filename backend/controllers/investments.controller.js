@@ -1,23 +1,20 @@
-const { sql } = require('../db');
+const { query } = require('../db');
 
 exports.getInvestments = async (req, res, next) => {
   try {
     const { type } = req.query;
     
-    let result;
+    let sql = 'SELECT * FROM investments WHERE user_id = $1';
+    const params = [req.userId];
+    
     if (type) {
-      result = await sql`
-        SELECT * FROM investments 
-        WHERE user_id = ${req.userId} AND type = ${type}
-        ORDER BY created_at DESC
-      `;
-    } else {
-      result = await sql`
-        SELECT * FROM investments 
-        WHERE user_id = ${req.userId}
-        ORDER BY created_at DESC
-      `;
+      sql += ' AND type = $2';
+      params.push(type);
     }
+    
+    sql += ' ORDER BY created_at DESC';
+    
+    const result = await query(sql, params);
 
     // Calculate return on investment for each entry
     const enriched = result.rows.map(inv => {
@@ -67,11 +64,11 @@ exports.createInvestment = async (req, res, next) => {
       return res.status(400).json({ error: 'Current value cannot be negative.' });
     }
 
-    const result = await sql`
-      INSERT INTO investments (user_id, name, type, amount, current_value, purchase_date, notes)
-      VALUES (${req.userId}, ${name}, ${type}, ${amount}, ${currentVal}, ${purchase_date}, ${notes || null})
-      RETURNING *
-    `;
+    const result = await query(
+      `INSERT INTO investments (user_id, name, type, amount, current_value, purchase_date, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.userId, name, type, amount, currentVal, purchase_date, notes || null]
+    );
 
     const created = result.rows[0];
     const amt = parseFloat(created.amount);
@@ -93,9 +90,10 @@ exports.createInvestment = async (req, res, next) => {
 exports.updateInvestment = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const existingResult = await sql`
-      SELECT * FROM investments WHERE id = ${id} AND user_id = ${req.userId}
-    `;
+    const existingResult = await query(
+      'SELECT * FROM investments WHERE id = $1 AND user_id = $2',
+      [id, req.userId]
+    );
 
     if (existingResult.rows.length === 0) {
       return res.status(404).json({ error: 'Investment not found.' });
@@ -113,13 +111,12 @@ exports.updateInvestment = async (req, res, next) => {
       return res.status(400).json({ error: 'Amount must be greater than 0.' });
     }
 
-    const result = await sql`
-      UPDATE investments 
-      SET name = ${name}, type = ${type}, amount = ${amount}, current_value = ${current_value}, 
-          purchase_date = ${purchase_date}, notes = ${notes}
-      WHERE id = ${id} AND user_id = ${req.userId}
-      RETURNING *
-    `;
+    const result = await query(
+      `UPDATE investments 
+       SET name = $1, type = $2, amount = $3, current_value = $4, purchase_date = $5, notes = $6
+       WHERE id = $7 AND user_id = $8 RETURNING *`,
+      [name, type, amount, current_value, purchase_date, notes, id, req.userId]
+    );
 
     const updated = result.rows[0];
     const amt = parseFloat(updated.amount);
@@ -141,10 +138,10 @@ exports.updateInvestment = async (req, res, next) => {
 exports.deleteInvestment = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const result = await sql`
-      DELETE FROM investments WHERE id = ${id} AND user_id = ${req.userId}
-      RETURNING id
-    `;
+    const result = await query(
+      'DELETE FROM investments WHERE id = $1 AND user_id = $2 RETURNING id',
+      [id, req.userId]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Investment not found.' });

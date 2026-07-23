@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { sql } = require('../db');
+const { query } = require('../db');
 const { validateSignup, validateLogin } = require('../utils/validators');
 
 const DEFAULT_CATEGORIES = [
@@ -20,26 +20,25 @@ exports.signup = async (req, res, next) => {
       return res.status(400).json({ error: validation.message });
     }
 
-    const existingUser = await sql`SELECT id FROM users WHERE email = ${email}`;
+    const existingUser = await query('SELECT id FROM users WHERE email = $1', [email]);
     if (existingUser.rows.length > 0) {
       return res.status(409).json({ error: 'Email is already registered.' });
     }
 
     const passwordHash = bcrypt.hashSync(password, 10);
 
-    const result = await sql`
-      INSERT INTO users (name, email, password_hash) 
-      VALUES (${name}, ${email}, ${passwordHash})
-      RETURNING id
-    `;
+    const result = await query(
+      'INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id',
+      [name, email, passwordHash]
+    );
     const userId = result.rows[0].id;
 
     // Insert default categories for the new user
     for (const cat of DEFAULT_CATEGORIES) {
-      await sql`
-        INSERT INTO categories (user_id, name, type) 
-        VALUES (${userId}, ${cat.name}, ${cat.type})
-      `;
+      await query(
+        'INSERT INTO categories (user_id, name, type) VALUES ($1, $2, $3)',
+        [userId, cat.name, cat.type]
+      );
     }
 
     const token = jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -65,7 +64,7 @@ exports.login = async (req, res, next) => {
       return res.status(400).json({ error: validation.message });
     }
 
-    const result = await sql`SELECT * FROM users WHERE email = ${email}`;
+    const result = await query('SELECT * FROM users WHERE email = $1', [email]);
     if (result.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
